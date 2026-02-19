@@ -59,7 +59,7 @@ async function ensureContentScript(tabId) {
   }
 
   await chrome.scripting.insertCSS({ target: { tabId }, files: ['styles.css'] });
-  await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+  await chrome.scripting.executeScript({ target: { tabId }, files: ['lib/turndown.min.js', 'content.js'] });
 }
 
 function setBadge(text, color) {
@@ -204,7 +204,68 @@ async function handleOneClickTriggered(message, sender) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Gemini API reformat handler (Layer 3)
+// ---------------------------------------------------------------------------
+
+async function reformatWithGemini(apiKey, rawText, jobTitle) {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{
+            text: `You are a job description formatter. Reformat the following job description into clean, well-structured Markdown. Rules:
+- Use ## for section headings (About, Responsibilities, Qualifications, Benefits, etc.)
+- Use bullet lists (- ) for list items
+- Separate sections with blank lines
+- Remove duplicate content
+- Keep ALL original information, do not summarize or remove anything
+- Do not add any content not in the original
+- Output ONLY the formatted markdown, no explanations
+
+Job Title: ${jobTitle}
+
+Raw text:
+${rawText}`
+          }]
+        }],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 4096
+        }
+      })
+    }
+  );
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => '');
+    throw new Error(`Gemini API error ${response.status}: ${errorBody.slice(0, 200)}`);
+  }
+  const data = await response.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || rawText;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'GEMINI_REFORMAT') {
+    (async () => {
+      try {
+        const result = await chrome.storage.local.get('geminiSettings');
+        const apiKey = result?.geminiSettings?.apiKey;
+        if (!apiKey) {
+          sendResponse({ ok: false, message: 'No Gemini API key configured.' });
+          return;
+        }
+        const reformatted = await reformatWithGemini(apiKey, message.rawText || '', message.jobTitle || '');
+        sendResponse({ ok: true, reformatted });
+      } catch (error) {
+        sendResponse({ ok: false, message: error?.message || 'Gemini API call failed.' });
+      }
+    })();
+    return true;
+  }
+
   if (message?.type === 'ONECLICK_TRIGGERED') {
     handleOneClickTriggered(message, sender).then(() => {
       sendResponse({ ok: true });

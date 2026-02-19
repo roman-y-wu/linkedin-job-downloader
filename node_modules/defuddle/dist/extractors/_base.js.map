@@ -1,0 +1,1 @@
+{"version":3,"file":"_base.js","sourceRoot":"","sources":["../../src/extractors/_base.ts"],"names":[],"mappings":";;;AAEA,MAAsB,aAAa;IAKlC,YAAY,QAAkB,EAAE,GAAW,EAAE,aAAmB;QAC/D,IAAI,CAAC,QAAQ,GAAG,QAAQ,CAAC;QACzB,IAAI,CAAC,GAAG,GAAG,GAAG,CAAC;QACf,IAAI,CAAC,aAAa,GAAG,aAAa,CAAC;IACpC,CAAC;CAID;AAbD,sCAaC"}

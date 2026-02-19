@@ -1,9 +1,12 @@
 {
   "manifest_version": 3,
   "name": "LinkedIn Job Pipeline",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "Export LinkedIn job descriptions to TXT with one toolbar click",
   "permissions": ["activeTab", "scripting", "downloads", "storage"],
+  "host_permissions": [
+    "https://generativelanguage.googleapis.com/*"
+  ],
   "background": {
     "service_worker": "background.js"
   },
@@ -22,8 +25,9 @@
   "content_scripts": [
     {
       "matches": ["*://*.linkedin.com/jobs/*"],
-      "js": ["content.js"],
+      "js": ["lib/turndown.min.js", "content.js"],
       "css": ["styles.css"]
     }
-  ]
+  ],
+  "options_page": "options.html"
 }

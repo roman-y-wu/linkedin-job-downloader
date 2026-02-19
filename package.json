@@ -1,0 +1,27 @@
+{
+  "name": "linkedin-job-pipeline",
+  "version": "1.0.0",
+  "description": "一个极简 Chrome 扩展：",
+  "main": "background.js",
+  "directories": {
+    "lib": "lib"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/roman-y-wu/linkedin-job-downloader.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/roman-y-wu/linkedin-job-downloader/issues"
+  },
+  "homepage": "https://github.com/roman-y-wu/linkedin-job-downloader#readme",
+  "dependencies": {
+    "defuddle": "^0.7.0"
+  }
+}

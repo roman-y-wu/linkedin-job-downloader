@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>LinkedIn Job Pipeline - Settings</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 24px;
+      max-width: 480px;
+      color: #1a1a1a;
+      background: #fafafa;
+    }
+    h1 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 20px;
+      color: #0a66c2;
+    }
+    .section {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .section h2 {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 6px;
+    }
+    input[type="text"], input[type="password"] {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+    select {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 13px;
+      margin-bottom: 12px;
+      background: #fff;
+    }
+    .description {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 12px;
+      line-height: 1.4;
+    }
+    button {
+      background: #0a66c2;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 8px 20px;
+      font-size: 13px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    button:hover { background: #004182; }
+    .status {
+      font-size: 12px;
+      margin-top: 8px;
+      color: #057642;
+      min-height: 16px;
+    }
+    .status.error { color: #cf222e; }
+  </style>
+</head>
+<body>
+  <h1>LinkedIn Job Pipeline Settings</h1>
+
+  <div class="section">
+    <h2>Gemini AI Cleanup (Layer 3)</h2>
+    <p class="description">
+      When enabled, low-quality job descriptions are sent to Gemini for intelligent reformatting.
+      This requires a Google AI Studio API key.
+    </p>
+
+    <label for="apiKey">Gemini API Key</label>
+    <input type="password" id="apiKey" placeholder="AIza...">
+
+    <label for="aiMode">AI Mode</label>
+    <select id="aiMode">
+      <option value="off">Off - Never use Gemini</option>
+      <option value="auto">Auto - Only for low-quality output</option>
+      <option value="always">Always - Reformat every JD</option>
+    </select>
+    <p class="description">
+      <strong>Auto</strong>: Gemini is called only when Layer 1+2 produce output below a quality threshold.<br>
+      <strong>Always</strong>: Every exported JD is sent through Gemini (uses more API quota).
+    </p>
+
+    <button id="saveBtn">Save Settings</button>
+    <div class="status" id="status"></div>
+  </div>
+  <script src="options.js"></script>
+</body>
+</html>

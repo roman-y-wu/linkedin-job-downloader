@@ -61,23 +61,35 @@
     'select'
   ].join(', ');
 
-  const HEADING_TAGS = new Set(['H1', 'H2', 'H3', 'H4', 'H5', 'H6']);
-  const BLOCK_TAGS = new Set(['P', 'DIV', 'SECTION', 'ARTICLE', 'BLOCKQUOTE', 'PRE']);
   const SECTION_HEADING_LABELS = [
     'About the job',
+    'About the role',
+    'About the team',
+    'About the position',
     'About us',
+    'About you',
     'Overview',
     'Job Summary',
     'Summary',
     'Role',
+    'The Role',
+    'The Opportunity',
     'What you will do',
     "What you'll do",
-    'What you’ll do',
+    'What you\u2019ll do',
+    'What you will bring',
+    "What you'll bring",
+    'What you\u2019ll bring',
     'What we offer',
+    'What we are looking for',
+    "What we're looking for",
+    'What we\u2019re looking for',
     'What to expect during the interview process',
+    'What do you need to succeed',
     'Day to day',
     'The Team',
     'Our Culture',
+    'Key Responsibilities',
     'Responsibilities',
     'Duties',
     'Requirements',
@@ -94,13 +106,20 @@
     'Required Knowledge, Skills And Abilities',
     'Benefits',
     'Compensation',
+    'Salary',
     'Pay',
     'Pay Transparency',
+    'Total Rewards',
     'Schedule',
     'Additional Details',
     'Disclaimer',
     'Equal Opportunity Statement'
   ];
+
+  function escapeRegex(source) {
+    return String(source || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
   const SECTION_HEADING_PATTERNS = SECTION_HEADING_LABELS.map((heading) => {
     const source = escapeRegex(heading).replace(/\s+/g, '\\s+');
     return {
@@ -109,6 +128,59 @@
       exactPattern: new RegExp(`^${source}$`, 'i')
     };
   });
+
+  // ---------------------------------------------------------------------------
+  // Layer 1: Turndown.js configuration
+  // ---------------------------------------------------------------------------
+
+  const turndownAvailable = typeof TurndownService !== 'undefined';
+  let turndownService = null;
+
+  if (turndownAvailable) {
+    turndownService = new TurndownService({
+      headingStyle: 'atx',
+      bulletListMarker: '-',
+      codeBlockStyle: 'fenced',
+      hr: '---',
+      strongDelimiter: '**',
+      emDelimiter: '*'
+    });
+
+    turndownService.addRule('removeHidden', {
+      filter: function (node) {
+        if (!node.getAttribute) return false;
+        return (
+          node.getAttribute('aria-hidden') === 'true' ||
+          (node.classList &&
+            (node.classList.contains('visually-hidden') || node.classList.contains('sr-only'))) ||
+          (node.getAttribute('style') && /display:\s*none/i.test(node.getAttribute('style'))) ||
+          node.hasAttribute('hidden')
+        );
+      },
+      replacement: function () {
+        return '';
+      }
+    });
+
+    turndownService.addRule('removeInteractive', {
+      filter: ['button', 'input', 'textarea', 'select', 'script', 'style', 'noscript', 'template'],
+      replacement: function () {
+        return '';
+      }
+    });
+
+    // Strip links but keep text (LinkedIn internal links add noise)
+    turndownService.addRule('stripLinks', {
+      filter: 'a',
+      replacement: function (content) {
+        return content;
+      }
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Utility functions
+  // ---------------------------------------------------------------------------
 
   function findElement(selectorList) {
     for (const selector of selectorList) {
@@ -266,299 +338,165 @@
     return clickedAny;
   }
 
-  function normalizeParagraphText(text) {
-    const lines = String(text || '')
-      .replace(/\u00a0/g, ' ')
-      .replace(/\r\n/g, '\n')
-      .split('\n')
-      .map((line) => line.replace(/[ \t]+/g, ' ').trim())
-      .filter(Boolean);
+  // ---------------------------------------------------------------------------
+  // Layer 2: Post-processing (LinkedIn-specific fixes)
+  // ---------------------------------------------------------------------------
 
-    return lines.join('\n').trim();
+  // Fix 2.1: Rejoin year/salary ranges split across lines
+  function rejoinSplitRanges(text) {
+    // "3\n- 5+ years" → "3-5+ years"
+    let result = text.replace(/(\d{1,6})\n- (\d)/g, '$1-$2');
+    // "CAD $90K\n- CAD $140K" → "CAD $90K - CAD $140K"
+    result = result.replace(/([\d,.]+[KkMm]?)\n- (\$?[A-Z]{0,4}\s*\$?[\d,.]+)/g, '$1 - $2');
+    return result;
   }
 
-  function isLikelyHeadingText(text) {
-    const value = String(text || '').trim();
-    if (!value) return false;
-    if (value.length > 90) return false;
-    const words = value.split(/\s+/).filter(Boolean);
-    if (words.length > 10) return false;
-    if (/^[A-Z][A-Za-z0-9/&,'’()\- ]{2,90}$/.test(value)) return true;
-    return isKnownHeadingLine(value);
+  // Fix 2.2: Rejoin headings split by conjunctions
+  function rejoinSplitHeadings(text) {
+    // "## Required Skills\n\n&\n\nExperience:" → "## Required Skills & Experience:"
+    return text.replace(/(## [^\n]+)\n\n([&]|and|or)\n\n([A-Z][^\n]*)/gi, '$1 $2 $3');
   }
 
-  function extractInlineHeadingFromElement(element) {
-    if (!element || !element.childNodes) return null;
+  // Fix 2.3: Fix false heading fragments
+  function fixFalseHeadingFragments(text) {
+    const falseEndingWords = /\b(OF|THE|IS|TO|IN|FOR|A|AN|AND|OR|WITH|AT)\s*$/i;
+    const lines = text.split('\n');
+    const result = [];
 
-    const firstElementChild = Array.from(element.childNodes).find((node) => node.nodeType === Node.ELEMENT_NODE);
-    if (!firstElementChild) return null;
-    const tag = String(firstElementChild.tagName || '').toUpperCase();
-    if (tag !== 'STRONG' && tag !== 'B') return null;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
 
-    const headingRaw = normalizeParagraphText(firstElementChild.textContent || '');
-    const heading = headingRaw.replace(/[:：\-\u2013\u2014]+$/g, '').trim();
-    if (!isLikelyHeadingText(heading)) return null;
+      if (headingMatch && falseEndingWords.test(headingMatch[2])) {
+        const headingText = headingMatch[2];
+        let j = i + 1;
+        while (j < lines.length && lines[j].trim() === '') j++;
 
-    const clone = element.cloneNode(true);
-    const cloneFirstElementChild = Array.from(clone.childNodes).find((node) => node.nodeType === Node.ELEMENT_NODE);
-    if (cloneFirstElementChild) cloneFirstElementChild.remove();
-    const body = normalizeParagraphText(clone.innerText || clone.textContent || '');
-    if (!body) return null;
-
-    return { heading, body };
-  }
-
-  function appendParagraphLines(lines, text) {
-    const paragraph = normalizeParagraphText(text);
-    if (!paragraph) return;
-    paragraph.split('\n').forEach((line) => lines.push(line));
-    lines.push('');
-  }
-
-  function hasNestedListChild(element) {
-    return Array.from(element.children || []).some((child) => {
-      const tag = child.tagName ? child.tagName.toUpperCase() : '';
-      return tag === 'UL' || tag === 'OL';
-    });
-  }
-
-  function appendListItem(lines, markerPrefix, continuationPrefix, text) {
-    const itemText = normalizeParagraphText(text);
-    if (!itemText) return;
-    const itemLines = itemText.split('\n');
-    lines.push(`${markerPrefix}${itemLines[0]}`);
-    for (let i = 1; i < itemLines.length; i += 1) {
-      lines.push(`${continuationPrefix}${itemLines[i]}`);
-    }
-  }
-
-  function renderListText(listElement, lines, depth) {
-    const isOrdered = listElement.tagName.toUpperCase() === 'OL';
-    const startNumber = Math.max(1, Number.parseInt(listElement.getAttribute('start') || '1', 10) || 1);
-    const items = Array.from(listElement.children).filter((child) => child.tagName && child.tagName.toUpperCase() === 'LI');
-
-    for (let index = 0; index < items.length; index += 1) {
-      const item = items[index];
-      const itemClone = item.cloneNode(true);
-      itemClone.querySelectorAll(':scope > ul, :scope > ol').forEach((nested) => nested.remove());
-
-      const indent = '  '.repeat(depth);
-      const marker = isOrdered ? `${startNumber + index}. ` : '- ';
-      appendListItem(lines, `${indent}${marker}`, `${indent}  `, itemClone.innerText || itemClone.textContent || '');
-
-      const nestedLists = Array.from(item.children).filter((child) => {
-        const tag = child.tagName ? child.tagName.toUpperCase() : '';
-        return tag === 'UL' || tag === 'OL';
-      });
-      for (const nestedList of nestedLists) {
-        renderListText(nestedList, lines, depth + 1);
-      }
-    }
-
-    lines.push('');
-  }
-
-  function containsBrChild(element) {
-    return Array.from(element.childNodes).some(
-      (node) => node.nodeType === Node.ELEMENT_NODE && node.tagName.toUpperCase() === 'BR'
-    );
-  }
-
-  function renderBrDelimitedBlock(element, lines) {
-    let buffer = '';
-    for (const node of element.childNodes) {
-      if (node.nodeType === Node.ELEMENT_NODE && node.tagName.toUpperCase() === 'BR') {
-        appendParagraphLines(lines, buffer);
-        buffer = '';
-        continue;
-      }
-      if (node.nodeType === Node.TEXT_NODE) {
-        buffer += node.nodeValue || '';
-      } else if (node.nodeType === Node.ELEMENT_NODE) {
-        buffer += node.innerText || node.textContent || '';
-      }
-    }
-    appendParagraphLines(lines, buffer);
-  }
-
-  function renderStructuredTextFromContainer(container, lines) {
-    for (const childNode of container.childNodes) {
-      if (childNode.nodeType === Node.TEXT_NODE) {
-        appendParagraphLines(lines, childNode.nodeValue || '');
-        continue;
-      }
-      if (childNode.nodeType !== Node.ELEMENT_NODE) continue;
-
-      const tag = childNode.tagName.toUpperCase();
-      if (tag === 'UL' || tag === 'OL') {
-        renderListText(childNode, lines, 0);
-        continue;
-      }
-      if (HEADING_TAGS.has(tag)) {
-        appendParagraphLines(lines, childNode.innerText || childNode.textContent || '');
-        continue;
-      }
-      if (BLOCK_TAGS.has(tag) || tag === 'MAIN') {
-        if (hasNestedListChild(childNode)) {
-          renderStructuredTextFromContainer(childNode, lines);
-        } else if (containsBrChild(childNode)) {
-          renderBrDelimitedBlock(childNode, lines);
-        } else {
-          const inlineHeading = extractInlineHeadingFromElement(childNode);
-          if (inlineHeading) {
-            lines.push(inlineHeading.heading);
-            lines.push('');
-            inlineHeading.body.split('\n').forEach((line) => lines.push(line));
-            lines.push('');
-            continue;
-          }
-          appendParagraphLines(lines, childNode.innerText || childNode.textContent || '');
+        if (j < lines.length && !lines[j].startsWith('#')) {
+          result.push(headingText + ' ' + lines[j].trim());
+          i = j;
+          continue;
         }
-        continue;
-      }
-      if (tag === 'BR') {
-        lines.push('');
-        continue;
       }
 
-      appendParagraphLines(lines, childNode.innerText || childNode.textContent || '');
+      result.push(line);
     }
+
+    return result.join('\n');
   }
 
-  function compactStructuredLines(lines) {
-    const output = [];
-
-    for (const rawLine of lines) {
-      const line = String(rawLine || '').replace(/\u00a0/g, ' ').replace(/[ \t]+$/g, '');
-      if (!line.trim()) {
-        if (output.length === 0 || output[output.length - 1] === '') continue;
-        output.push('');
-        continue;
-      }
-      output.push(line);
-    }
-
-    while (output.length > 0 && output[output.length - 1] === '') {
-      output.pop();
-    }
-
-    return output.join('\n');
+  // Fix 2.4: Split concatenated sentences (missing spaces after period)
+  function splitConcatenatedSentences(text) {
+    return text.replace(/([a-z)])\.([A-Z])/g, '$1.\n$2');
   }
 
-  function escapeRegex(source) {
-    return String(source || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Fix 2.5: Detect and split concatenated headings in plain text
+  function splitConcatenatedHeadings(text) {
+    let result = text;
+    for (const label of SECTION_HEADING_LABELS) {
+      const escaped = escapeRegex(label);
+      const re = new RegExp(`([a-z.!?)])\\s*(${escaped})(?=\\s|:|$)`, 'gmi');
+      result = result.replace(re, '$1\n\n## $2\n');
+    }
+    return result;
   }
 
-  function formatPlainTextFallback(text) {
-    let value = String(text || '')
-      .replace(/\u00a0/g, ' ')
-      .replace(/\r\n/g, '\n')
-      .replace(/[ \t]+\n/g, '\n')
-      .replace(/\n[ \t]+/g, '\n')
-      .replace(/[ \t]{2,}/g, ' ')
-      .trim();
-
-    if (!value) return '';
-
-    value = value.replace(/\s*[•▪◦○►▸➤➜–]\s*/g, '\n- ');
-
-    for (const heading of SECTION_HEADING_LABELS) {
-      const src = escapeRegex(heading).replace(/\s+/g, '\\s+');
-      const re = new RegExp(`(^|[\\n\\r]|[.!?]\\s+)(\\s*(${src}))(?=\\s|:|$)`, 'gi');
-      value = value.replace(re, (_match, prefix, headingText) => `${prefix}\n\n${headingText.trim()}\n`);
-    }
-
-    value = value.replace(/([A-Z][A-Za-z0-9&/,'’()\- ]{2,80}):\s+/g, '\n\n$1:\n');
-    value = value.replace(/^(.{1,80}):\s*$/gm, '\n\n$1:\n');
-
-    value = value.replace(/\n{3,}/g, '\n\n').trim();
-
-    if (!value.includes('\n')) {
-      const sentenceSplit = value
-        .split(/(?<=[.!?])\s+(?=[A-Z0-9(])/g)
-        .map((part) => part.trim())
-        .filter(Boolean);
-      if (sentenceSplit.length >= 3) {
-        value = sentenceSplit.join('\n');
-      }
-    }
-
-    return value;
+  // Fix 2.6: HTML entity decoding
+  function decodeHtmlEntities(text) {
+    return text
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&apos;/g, "'")
+      .replace(/&amp;#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+      .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)));
   }
 
-  function scoreDescriptionQuality(text) {
-    const value = String(text || '').trim();
-    if (!value) return -1;
-
-    const lines = value.split('\n').map((line) => line.trim()).filter(Boolean);
-    const bulletLines = lines.filter((line) => /^(-|\*|\d+\.)\s+/.test(line)).length;
-    const headingLines = lines.filter((line) => {
-      if (line.length > 90) return false;
-      if (/^[A-Z][A-Za-z0-9/&,'’()\- ]{2,90}$/.test(line) && !/[.!?]$/.test(line)) return true;
-      return isKnownHeadingLine(line);
-    }).length;
-    const longLines = lines.filter((line) => line.length > 220).length;
-    const uniqueLineRatio = lines.length === 0 ? 0 : new Set(lines.map((line) => line.toLowerCase())).size / lines.length;
-
-    return (
-      value.length * 0.01 +
-      lines.length * 0.5 +
-      bulletLines * 3 +
-      headingLines * 2 -
-      longLines * 2 +
-      uniqueLineRatio * 4
-    );
+  // Fix 2.9: Clean up broken bold/italic markers from Turndown
+  // Turndown sometimes produces orphaned ** when <strong> wraps across block elements
+  function cleanBrokenMarkdownMarkers(text) {
+    let result = text;
+    // Remove lines that are just ** or ****
+    result = result.replace(/^\*{2,}$/gm, '');
+    // Fix "**text\n\n**continuation" → "text\ncontinuation"
+    // (orphaned opening ** at end of line followed by orphaned closing ** at start of next content)
+    result = result.replace(/\*\*([^\n*]+)\n\n\*\*/g, '$1\n\n');
+    // Fix "**\n**text" → "text" (empty bold followed by bold start)
+    result = result.replace(/\*\*\s*\n\*\*([^\n*]+)/g, '$1');
+    // Fix "****text" → "text" (doubled bold markers)
+    result = result.replace(/\*{4,}/g, '');
+    // Remove orphaned ** at start of line (not followed by closing **)
+    result = result.replace(/^\*\*(?!\*)/gm, '');
+    // Remove orphaned ** at end of line (not preceded by opening **)
+    result = result.replace(/(?<!\*)\*\*$/gm, '');
+    return result;
   }
 
-  function flattenJsonLdNodes(input, out) {
-    if (!input) return;
-    if (Array.isArray(input)) {
-      for (const item of input) flattenJsonLdNodes(item, out);
-      return;
-    }
-    if (typeof input !== 'object') return;
+  // Fix 2.7: Split long wall-of-text lines at camelCase-like word boundaries
+  // "productsPartner with..." → "products\nPartner with..."
+  // Only applied to lines >150 chars to avoid splitting legitimate compound words
+  const COMPOUND_WORD_RE = /JavaScript|TypeScript|LinkedIn|GitHub|GitLab|YouTube|WordPress|NoSQL|GraphQL|PostgreSQL|iPhone|iPad|macOS|iOS|GenAI|DevOps|DataOps|MLOps|QuickBooks|MongoDB|DynamoDB|PowerBI|IntelliJ|eBay|eCommerce|OutSystems|DocuSign|SalesForce|HubSpot|CyberArk|ServiceNow|NetSuite|PeopleSoft/i;
 
-    out.push(input);
-    if (Array.isArray(input['@graph'])) {
-      flattenJsonLdNodes(input['@graph'], out);
-    }
+  function splitConcatenatedWords(text) {
+    return text.split('\n').map((line) => {
+      if (line.length <= 150) return line;
+      return line.replace(/([a-z]{2,})([A-Z][a-z]{2,})/g, (match, before, after, offset) => {
+        const ctx = line.substring(Math.max(0, offset - 10), Math.min(line.length, offset + match.length + 5));
+        if (COMPOUND_WORD_RE.test(ctx)) return match;
+        return before + '\n' + after;
+      });
+    }).join('\n');
   }
 
-  function extractDescriptionFromJsonLd() {
-    const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
-    const allNodes = [];
+  // Fix 2.8: Split at colon boundaries without space
+  // "Salary:$75,900" → "Salary: $75,900"
+  // "Pay Type:SalariedThe above..." → "Pay Type: Salaried\nThe above..."
+  function splitColonConcatenated(text) {
+    // Add space after colon when followed by $ or digit
+    let result = text.replace(/([A-Za-z]):(\$|\d)/g, '$1: $2');
+    // Split "word:CapitalizedWord" where colon has no space
+    result = result.replace(/([a-z]):([A-Z][a-z])/g, '$1:\n$2');
+    return result;
+  }
 
-    for (const script of scripts) {
-      const raw = String(script.textContent || '').trim();
-      if (!raw) continue;
-      try {
-        const parsed = JSON.parse(raw);
-        flattenJsonLdNodes(parsed, allNodes);
-      } catch (_error) {
-        // Ignore malformed JSON-LD blocks.
-      }
+  function postProcessMarkdown(text) {
+    let result = text;
+    result = cleanBrokenMarkdownMarkers(result);
+    result = rejoinSplitRanges(result);
+    result = rejoinSplitHeadings(result);
+    result = fixFalseHeadingFragments(result);
+    result = splitConcatenatedSentences(result);
+    result = splitColonConcatenated(result);
+    result = splitConcatenatedWords(result);
+    result = decodeHtmlEntities(result);
+    result = result.replace(/\n{3,}/g, '\n\n');
+    return result.trim();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Heading detection and spacing (shared by Layer 1+2)
+  // ---------------------------------------------------------------------------
+
+  // Short heading labels that are also common English words — only promote to
+  // heading when they appear with a colon suffix or preceded by a blank line
+  // AND followed by substantive content (not a sentence continuation).
+  const AMBIGUOUS_HEADING_LABELS = new Set([
+    'role', 'summary', 'pay', 'salary', 'compensation',
+    'benefits', 'schedule', 'duties', 'overview', 'disclaimer'
+  ]);
+
+  function isKnownHeadingLine(text) {
+    const line = String(text || '').trim();
+    if (!line) return false;
+    const matched = SECTION_HEADING_PATTERNS.some((candidate) => candidate.exactPattern.test(line));
+    if (!matched) return false;
+    // For ambiguous single-word labels, require a colon suffix to confirm heading intent
+    if (AMBIGUOUS_HEADING_LABELS.has(line.toLowerCase().replace(/[:\s]+$/, ''))) {
+      return /:\s*$/.test(line);
     }
-
-    const jobPostingNode = allNodes.find((node) => {
-      const type = node?.['@type'];
-      if (Array.isArray(type)) return type.some((v) => String(v).toLowerCase() === 'jobposting');
-      return String(type || '').toLowerCase() === 'jobposting';
-    });
-
-    if (!jobPostingNode) return '';
-    const description = String(jobPostingNode.description || '').trim();
-    if (!description) return '';
-
-    const wrapper = document.createElement('div');
-    wrapper.innerHTML = description;
-    wrapper.querySelectorAll(DESCRIPTION_NOISE_SELECTORS).forEach((el) => el.remove());
-
-    const lines = [];
-    renderStructuredTextFromContainer(wrapper, lines);
-    const structured = compactStructuredLines(lines);
-    if (structured) return structured;
-
-    return normalizeParagraphText(wrapper.innerText || wrapper.textContent || '');
+    return true;
   }
 
   function splitHeadingLine(text) {
@@ -575,7 +513,7 @@
       }
     }
 
-    const genericMatch = line.match(/^([A-Z][A-Za-z0-9&/,'’()\- ]{2,70}):\s+(.+)$/);
+    const genericMatch = line.match(/^([A-Z][A-Za-z0-9&/,\u2018\u2019()\- ]{2,70}):\s+(.+)$/);
     if (genericMatch) {
       return {
         heading: String(genericMatch[1] || '').trim(),
@@ -584,7 +522,7 @@
     }
 
     const keywordInlineMatch = line.match(
-      /^(Responsibilities|Qualifications|Requirements|Benefits|Compensation|What you will do|What you'll do|What you’ll do|Preferred Qualifications|Required Qualifications|Minimum Qualifications|Must Have|Nice to Have)(?:\s*[:\-])?\s+(.+)$/i
+      /^(Responsibilities|Qualifications|Requirements|Benefits|Compensation|What you will do|What you'll do|What you\u2019ll do|Preferred Qualifications|Required Qualifications|Minimum Qualifications|Must Have|Nice to Have)(?:\s*[:\-])?\s+(.+)$/i
     );
     if (keywordInlineMatch) {
       return {
@@ -593,21 +531,7 @@
       };
     }
 
-    const allCapsHeadingMatch = line.match(/^([A-Z][A-Z0-9/&,'’()\- ]{4,60})\s+([A-Z][\s\S]{12,})$/);
-    if (allCapsHeadingMatch) {
-      return {
-        heading: String(allCapsHeadingMatch[1] || '').trim(),
-        body: String(allCapsHeadingMatch[2] || '').trim()
-      };
-    }
-
     return null;
-  }
-
-  function isKnownHeadingLine(text) {
-    const line = String(text || '').trim();
-    if (!line) return false;
-    return SECTION_HEADING_PATTERNS.some((candidate) => candidate.exactPattern.test(line));
   }
 
   function enforceHeadingSpacing(text) {
@@ -616,12 +540,51 @@
       .map((line) => String(line || '').trimEnd());
     const output = [];
 
-    for (const rawLine of sourceLines) {
-      const line = rawLine.trim();
+    for (let i = 0; i < sourceLines.length; i++) {
+      const line = sourceLines[i].trim();
       if (!line) {
         if (output.length > 0 && output[output.length - 1] !== '') {
           output.push('');
         }
+        continue;
+      }
+
+      // Check lines already formatted as headings — but validate them
+      const existingHeadingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+      if (existingHeadingMatch) {
+        const headingText = existingHeadingMatch[2].trim();
+        // Check if this "heading" is actually a sentence continuation:
+        // If the previous non-blank line ends without punctuation (no . ! ? :)
+        // and this heading text starts with a lowercase-like word or is ambiguous,
+        // it's likely a false heading from Turndown.
+        const prevContent = output.length > 0 ? output[output.length - 1] : '';
+        const prevEndsWithoutPunctuation = prevContent && !/[.!?:]\s*$/.test(prevContent) && prevContent !== '';
+        const isAmbiguous = AMBIGUOUS_HEADING_LABELS.has(headingText.toLowerCase().replace(/[:\s]+$/, ''));
+
+        if (prevEndsWithoutPunctuation && isAmbiguous) {
+          // Find next non-blank line to check if it's a continuation
+          let nextContent = '';
+          for (let j = i + 1; j < sourceLines.length; j++) {
+            const nl = sourceLines[j].trim();
+            if (nl) { nextContent = nl; break; }
+          }
+          const nextStartsLowercase = nextContent && /^[a-z]/.test(nextContent);
+
+          if (nextStartsLowercase) {
+            // This is a false heading — rejoin with previous line
+            if (output.length > 0 && output[output.length - 1] === '') output.pop();
+            if (output.length > 0) {
+              output[output.length - 1] += ' ' + headingText;
+            } else {
+              output.push(headingText);
+            }
+            continue;
+          }
+        }
+
+        if (output.length > 0 && output[output.length - 1] !== '') output.push('');
+        output.push(line);
+        output.push('');
         continue;
       }
 
@@ -645,12 +608,29 @@
       output.push(line);
     }
 
-    while (output.length > 0 && output[output.length - 1] === '') {
-      output.pop();
+    // Rejoin orphan continuation lines: if a line starts with lowercase
+    // and the previous line is not blank, it's likely a sentence continuation
+    const rejoined = [];
+    for (const line of output) {
+      if (
+        rejoined.length > 0 &&
+        /^[a-z]/.test(line) &&
+        rejoined[rejoined.length - 1] !== '' &&
+        !rejoined[rejoined.length - 1].startsWith('-') &&
+        !rejoined[rejoined.length - 1].startsWith('#')
+      ) {
+        rejoined[rejoined.length - 1] += ' ' + line;
+        continue;
+      }
+      rejoined.push(line);
+    }
+
+    while (rejoined.length > 0 && rejoined[rejoined.length - 1] === '') {
+      rejoined.pop();
     }
 
     const compact = [];
-    for (const line of output) {
+    for (const line of rejoined) {
       if (line === '' && (compact.length === 0 || compact[compact.length - 1] === '')) continue;
       compact.push(line);
     }
@@ -658,44 +638,227 @@
     return compact.join('\n');
   }
 
-  function extractStructuredDescriptionText(descriptionElement) {
+  // ---------------------------------------------------------------------------
+  // Quality scoring
+  // ---------------------------------------------------------------------------
+
+  function scoreMarkdownQuality(text) {
+    const value = String(text || '').trim();
+    if (!value) return -1;
+
+    const lines = value.split('\n').map((line) => line.trim()).filter(Boolean);
+    const bulletLines = lines.filter((line) => /^(-|\*|\d+\.)\s+/.test(line)).length;
+    const headingLines = lines.filter((line) => /^#{1,6}\s+/.test(line)).length;
+    const longLines = lines.filter((line) => line.length > 220).length;
+    const uniqueLineRatio = lines.length === 0 ? 0 : new Set(lines.map((line) => line.toLowerCase())).size / lines.length;
+
+    return (
+      value.length * 0.01 +
+      lines.length * 0.5 +
+      bulletLines * 3 +
+      headingLines * 2 -
+      longLines * 2 +
+      uniqueLineRatio * 4
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // JSON-LD extraction
+  // ---------------------------------------------------------------------------
+
+  function flattenJsonLdNodes(input, out) {
+    if (!input) return;
+    if (Array.isArray(input)) {
+      for (const item of input) flattenJsonLdNodes(item, out);
+      return;
+    }
+    if (typeof input !== 'object') return;
+
+    out.push(input);
+    if (Array.isArray(input['@graph'])) {
+      flattenJsonLdNodes(input['@graph'], out);
+    }
+  }
+
+  function extractDescriptionHtmlFromJsonLd() {
+    const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
+    const allNodes = [];
+
+    for (const script of scripts) {
+      const raw = String(script.textContent || '').trim();
+      if (!raw) continue;
+      try {
+        const parsed = JSON.parse(raw);
+        flattenJsonLdNodes(parsed, allNodes);
+      } catch (_error) {
+        // Ignore malformed JSON-LD blocks.
+      }
+    }
+
+    const jobPostingNode = allNodes.find((node) => {
+      const type = node?.['@type'];
+      if (Array.isArray(type)) return type.some((v) => String(v).toLowerCase() === 'jobposting');
+      return String(type || '').toLowerCase() === 'jobposting';
+    });
+
+    if (!jobPostingNode) return '';
+    return String(jobPostingNode.description || '').trim();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Plain-text fallback (when Turndown is not available)
+  // ---------------------------------------------------------------------------
+
+  function formatPlainTextFallback(html) {
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = html;
+    wrapper.querySelectorAll(DESCRIPTION_NOISE_SELECTORS).forEach((el) => el.remove());
+    let text = String(wrapper.innerText || wrapper.textContent || '')
+      .replace(/\u00a0/g, ' ')
+      .replace(/\r\n/g, '\n')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n[ \t]+/g, '\n')
+      .replace(/[ \t]{2,}/g, ' ')
+      .trim();
+
+    if (!text) return '';
+
+    text = text.replace(/\s*[•▪◦○►▸➤➜–]\s*/g, '\n- ');
+
+    for (const heading of SECTION_HEADING_LABELS) {
+      const src = escapeRegex(heading).replace(/\s+/g, '\\s+');
+      const re = new RegExp(`(^|[\\n\\r]|[.!?]\\s+)(\\s*(${src}))(?=\\s|:|$)`, 'gi');
+      text = text.replace(re, (_match, prefix, headingText) => `${prefix}\n\n${headingText.trim()}\n`);
+    }
+
+    text = text.replace(/\n{3,}/g, '\n\n').trim();
+    return text;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Description extraction pipeline (Layer 1 + Layer 2)
+  // ---------------------------------------------------------------------------
+
+  function extractDescriptionMarkdown(descriptionElement) {
     const candidates = [];
 
-    if (descriptionElement) {
+    // Candidate 1: Turndown from DOM element
+    if (descriptionElement && turndownService) {
       const clone = descriptionElement.cloneNode(true);
       clone.querySelectorAll(DESCRIPTION_NOISE_SELECTORS).forEach((el) => el.remove());
-
-      const lines = [];
-      renderStructuredTextFromContainer(clone, lines);
-      const content = compactStructuredLines(lines);
-      if (content) {
-        candidates.push(enforceHeadingSpacing(content));
-      }
-
-      const fallbackText = formatPlainTextFallback(clone.innerText || clone.textContent || '');
-      if (fallbackText) {
-        candidates.push(enforceHeadingSpacing(fallbackText));
+      try {
+        const md = turndownService.turndown(clone.innerHTML);
+        if (md.trim()) candidates.push(md);
+      } catch (_error) {
+        // Turndown failed; fall through to other candidates.
       }
     }
 
-    const jsonLdDescription = extractDescriptionFromJsonLd();
-    if (jsonLdDescription) {
-      candidates.push(enforceHeadingSpacing(formatPlainTextFallback(jsonLdDescription)));
+    // Candidate 2: Turndown from JSON-LD HTML
+    const jsonLdHtml = extractDescriptionHtmlFromJsonLd();
+    if (jsonLdHtml && turndownService) {
+      try {
+        const md = turndownService.turndown(jsonLdHtml);
+        if (md.trim()) candidates.push(md);
+      } catch (_error) {
+        // Ignore.
+      }
     }
 
-    const uniqueCandidates = Array.from(new Set(candidates.map((item) => String(item || '').trim()).filter(Boolean)));
-    if (uniqueCandidates.length === 0) return 'Job description not found';
+    // Candidate 3: Plain-text fallback from DOM
+    if (descriptionElement && candidates.length === 0) {
+      const clone = descriptionElement.cloneNode(true);
+      clone.querySelectorAll(DESCRIPTION_NOISE_SELECTORS).forEach((el) => el.remove());
+      const fallback = String(clone.innerText || clone.textContent || '').trim();
+      if (fallback) candidates.push(fallback);
+    }
 
-    uniqueCandidates.sort((a, b) => scoreDescriptionQuality(b) - scoreDescriptionQuality(a));
-    return uniqueCandidates[0] || 'Job description not found';
+    // Candidate 4: Plain-text fallback from JSON-LD
+    if (jsonLdHtml && candidates.length === 0) {
+      const fallback = formatPlainTextFallback(jsonLdHtml);
+      if (fallback) candidates.push(fallback);
+    }
+
+    // Apply Layer 2 post-processing + heading enforcement to all candidates
+    const processed = candidates
+      .map((c) => postProcessMarkdown(c))
+      .filter(Boolean);
+
+    const unique = Array.from(new Set(processed.map((t) => t.trim()).filter(Boolean)));
+    if (unique.length === 0) return 'Job description not found';
+
+    unique.sort((a, b) => scoreMarkdownQuality(b) - scoreMarkdownQuality(a));
+    return unique[0];
   }
 
-  function extractJobDescriptionText() {
+  // ---------------------------------------------------------------------------
+  // Layer 3: Gemini integration (optional)
+  // ---------------------------------------------------------------------------
+
+  const GEMINI_QUALITY_THRESHOLD = 30;
+
+  async function getGeminiSettings() {
+    try {
+      const result = await chrome.storage.local.get('geminiSettings');
+      return result?.geminiSettings || { apiKey: '', mode: 'off' };
+    } catch (_error) {
+      return { apiKey: '', mode: 'off' };
+    }
+  }
+
+  async function requestGeminiReformat(rawText, jobTitle) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(
+        { type: 'GEMINI_REFORMAT', rawText, jobTitle },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          if (response?.ok && response.reformatted) {
+            resolve(response.reformatted);
+          } else {
+            reject(new Error(response?.message || 'Gemini reformat failed'));
+          }
+        }
+      );
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Main extraction orchestrator (Layer 1 + 2 + 3)
+  // ---------------------------------------------------------------------------
+
+  async function extractStructuredDescriptionText(descriptionElement) {
+    // Layer 1 + Layer 2
+    const markdown = extractDescriptionMarkdown(descriptionElement);
+
+    // Layer 3: Gemini (optional)
+    try {
+      const settings = await getGeminiSettings();
+      if (settings.apiKey && settings.mode !== 'off') {
+        const quality = scoreMarkdownQuality(markdown);
+        if (settings.mode === 'always' || (settings.mode === 'auto' && quality < GEMINI_QUALITY_THRESHOLD)) {
+          const jobTitle = getTextContent(findElement(SELECTORS.jobTitle)) || '';
+          const reformatted = await requestGeminiReformat(markdown, jobTitle);
+          if (reformatted && scoreMarkdownQuality(reformatted) > quality) {
+            return reformatted;
+          }
+        }
+      }
+    } catch (_error) {
+      // Gemini is optional — continue with Layer 1+2 output.
+    }
+
+    return markdown;
+  }
+
+  async function extractJobDescriptionText() {
     const jobDescEl = findElement(SELECTORS.jobDescription);
-    return extractStructuredDescriptionText(jobDescEl);
+    return await extractStructuredDescriptionText(jobDescEl);
   }
 
-  function getCurrentJobInfo() {
+  async function getCurrentJobInfo() {
     const jobTitle = getTextContent(findElement(SELECTORS.jobTitle)) || 'Unknown Position';
     const companyName = getTextContent(findElement(SELECTORS.companyName)) || 'Unknown Company';
     const locationText = extractLocation() || 'Unknown Location';
@@ -706,11 +869,15 @@
       jobTitle,
       companyName,
       location: locationText,
-      jobDescriptionText: extractJobDescriptionText(),
+      jobDescriptionText: await extractJobDescriptionText(),
       jobId,
       jobUrl: toStablePageUrl(rawUrl, jobId)
     };
   }
+
+  // ---------------------------------------------------------------------------
+  // Toast notification
+  // ---------------------------------------------------------------------------
 
   function showToast(message, isError) {
     let toast = document.getElementById('linkedin-job-tracker-toast');
@@ -729,6 +896,10 @@
       }
     }, 2200);
   }
+
+  // ---------------------------------------------------------------------------
+  // File download
+  // ---------------------------------------------------------------------------
 
   function triggerTxtDownload(fileName, textContent) {
     const safeName = String(fileName || '').trim() || 'linkedin_job_description.txt';
@@ -757,7 +928,6 @@
   // OneClick Job Tracker auto-trigger integration
   // ---------------------------------------------------------------------------
 
-  // Only match the distinctive OneClick brand text — never matches LinkedIn native UI.
   const ONECLICK_BUTTON_RE = /\boneclick\b/i;
   const ONECLICK_BUTTON_MAX_LABEL_LENGTH = 80;
 
@@ -841,11 +1011,9 @@
       const target = event.target;
       if (!target || target.nodeType !== Node.ELEMENT_NODE) return;
 
-      // Walk up to 4 levels to find the OneClick button container
       let candidate = target;
       for (let i = 0; i < 4 && candidate && candidate !== document.body; i += 1) {
         if (isOneClickButton(candidate)) {
-          // Delay to let OneClick process the click first
           window.setTimeout(() => {
             triggerOneClickAutoExport();
           }, 800);
@@ -856,7 +1024,6 @@
     }, true);
   }
 
-  // Initialize OneClick click listener
   setupOneClickClickListener();
 
   // ---------------------------------------------------------------------------
@@ -887,7 +1054,6 @@
   function isDismissButton(element) {
     if (!isInteractiveButtonLikeElement(element)) return false;
 
-    // Check explicit dismiss selectors first.
     for (const selector of DISMISS_BUTTON_SELECTORS) {
       try {
         if (element.matches(selector)) return true;
@@ -993,7 +1159,6 @@
       hiddenCount += 1;
     }
 
-    // Walk through interactive elements only to avoid hiding random containers.
     container.querySelectorAll('button, a, [role="button"]').forEach((el) => {
       if (isOneClickButton(el) && !el.classList.contains('oneclick-hidden-by-dismiss')) {
         el.classList.add('oneclick-hidden-by-dismiss');
@@ -1052,7 +1217,6 @@
       const target = event.target;
       if (!target || target.nodeType !== Node.ELEMENT_NODE) return;
 
-      // Walk up a few levels to find the actual dismiss button element.
       let dismissBtn = null;
       let candidate = target;
       for (let i = 0; i < 5 && candidate && candidate !== document.body; i += 1) {
@@ -1068,20 +1232,17 @@
       const card = findJobCardContainer(dismissBtn);
       if (!card) return;
 
-      // Hide immediately.
       hideOneClickButtonsInContainer(card);
       const dismissedKey = rememberDismissedJobCard(card);
 
       if (dismissedKey) {
         ensureDismissRehideObserver();
       } else {
-        // Fallback for cards without a stable ID.
         observeCardTemporarily(card);
       }
     }, true);
   }
 
-  // Initialize dismiss-to-hide listener.
   setupDismissClickListener();
 
   // ---------------------------------------------------------------------------
@@ -1100,7 +1261,7 @@
       (async () => {
         try {
           await expandJobDescriptionIfNeeded();
-          sendResponse({ ok: true, jobInfo: getCurrentJobInfo() });
+          sendResponse({ ok: true, jobInfo: await getCurrentJobInfo() });
         } catch (error) {
           sendResponse({ ok: false, message: error?.message || 'Failed to parse job info.' });
         }
