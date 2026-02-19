@@ -15,7 +15,7 @@
 
 导出文件会进入浏览器默认下载目录，命名格式：
 
-- `yyyymmdd_Company_Position_Location.txt`
+- `Company_Position_Location.txt`
 
 若重名，浏览器会自动追加编号（`_1`, `_2`...）。
 
